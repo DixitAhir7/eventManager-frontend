@@ -5,6 +5,13 @@ import EventCard from "./components/EventCard";
 import RegisterModal from "./components/RegisterModal";
 import { api } from "./api";
 
+const fallbackImage = "https://images.unsplash.com/photo-1505236858219-8359eb29e329?auto=format&fit=crop&w=2000&q=85";
+
+const normalizeEvent = (event) => ({
+  ...event,
+  image: event?.image?.trim() || fallbackImage,
+});
+
 const fallbackEvents = [
   {
     _id: "demo-1",
@@ -46,8 +53,28 @@ function App() {
 
   useEffect(() => {
     api.get("/events")
-      .then((res) => setEvents(res.data.data))
-      .catch(() => setEvents(fallbackEvents))
+      .then((res) => {
+        const responseData = res?.data;
+
+        // Support the common API response shapes without changing the UI:
+        // { data: [...] }, { events: [...] }, or a direct [...] response.
+        const eventData = Array.isArray(responseData)
+          ? responseData
+          : Array.isArray(responseData?.data)
+            ? responseData.data
+            : Array.isArray(responseData?.events)
+              ? responseData.events
+              : Array.isArray(responseData?.data?.events)
+                ? responseData.data.events
+                : [];
+
+        // If the API responds successfully but contains no events, keep
+        // the existing demo fallback visible instead of rendering an empty page.
+        setEvents(
+          (eventData.length ? eventData : fallbackEvents).map(normalizeEvent)
+        );
+      })
+      .catch(() => setEvents(fallbackEvents.map(normalizeEvent)))
       .finally(() => setLoading(false));
   }, []);
 
@@ -57,18 +84,38 @@ function App() {
     return () => window.removeEventListener("scroll", handleScroll);
   }, []);
 
-  const categories = ["All", ...new Set(events.map((e) => e.category))];
+  const categories = ["All", ...new Set(events.map((e) => e.category).filter(Boolean))];
   const visibleEvents = events.filter((e) => {
     const categoryMatch = filter === "All" || e.category === filter;
-    const locationMatch = !locationFilter || e.location.toLowerCase().includes(locationFilter.toLowerCase());
+
+    // Keep location filtering safe even if an event has no location.
+    const eventLocation = String(e.location || "").trim().toLowerCase();
+    const searchLocation = locationFilter.trim().toLowerCase();
+    const locationMatch = !searchLocation || eventLocation.includes(searchLocation);
+
     let dateMatch = true;
 
     if (dateFilter) {
-      const [year, month, day] = dateFilter.split("-");
-      const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-      const monthStr = monthNames[parseInt(month) - 1];
-      const dayStr = parseInt(day).toString();
-      dateMatch = e.date.includes(monthStr) && e.date.includes(dayStr) && e.date.includes(year);
+      const eventDate = String(e.date || "").trim();
+
+      // Compare the selected YYYY-MM-DD directly when the API already
+      // returns an ISO date, otherwise normalize common display-date formats.
+      let eventDateKey = eventDate.slice(0, 10);
+
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(eventDateKey)) {
+        const parsedDate = new Date(eventDate);
+
+        if (!Number.isNaN(parsedDate.getTime())) {
+          const year = parsedDate.getFullYear();
+          const month = String(parsedDate.getMonth() + 1).padStart(2, "0");
+          const day = String(parsedDate.getDate()).padStart(2, "0");
+          eventDateKey = `${year}-${month}-${day}`;
+        } else {
+          eventDateKey = "";
+        }
+      }
+
+      dateMatch = eventDateKey === dateFilter;
     }
 
     return categoryMatch && dateMatch && locationMatch;
